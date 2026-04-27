@@ -116,3 +116,7 @@ main{padding:12px 12px 80px;display:flex;flex-direction:column;align-items:cente
   .controls-main{gap:5px}
   .btn-ctrl,.btn-accent{padding:8px 10px;font-size:.78rem}
 }
+
+.btn-mode { width: 100%; justify-content: center; }
+.btn-mode[data-mode="edit"] { background: rgba(255,200,0,.15); border-color: var(--warning); color: var(--warning); }
+.controls-sub { width: 100%; }
