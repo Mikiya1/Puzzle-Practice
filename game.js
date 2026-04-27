@@ -1,693 +1,775 @@
-/* ==========================================
-   パズドラ練習 - ゲームロジック
-   ========================================== */
-
 // ========== ドロップ定義 ==========
-const DROP_TYPES = {
-  fire:    { id: 'fire',    name: '火',     color: '#ff5a3c', glow: '#ff2200' },
-  water:   { id: 'water',   name: '水',     color: '#3ab8ff', glow: '#0088ff' },
-  wood:    { id: 'wood',    name: '木',     color: '#44d668', glow: '#00cc44' },
-  light:   { id: 'light',   name: '光',     color: '#ffe93c', glow: '#ffcc00' },
-  dark:    { id: 'dark',    name: '闇',     color: '#b06cff', glow: '#8800ff' },
-  heal:    { id: 'heal',    name: '回復',   color: '#ff8fb8', glow: '#ff4499' },
-  poison:  { id: 'poison',  name: '毒',     color: '#a0c020', glow: '#80a000' },
-  mpoison: { id: 'mpoison', name: '猛毒',   color: '#d060e0', glow: '#aa00cc' },
-  jammer:  { id: 'jammer',  name: 'お邪魔', color: '#808090', glow: '#606070' },
-  bomb:    { id: 'bomb',    name: '爆弾',   color: '#ff9020', glow: '#cc6600' },
+const DROP = {
+  fire:    { id:'fire',    name:'火',     color:'#e8321a', dark:'#8b1500', light:'#ff8877', glow:'rgba(255,80,30,.7)' },
+  water:   { id:'water',   name:'水',     color:'#1a7be8', dark:'#003d99', light:'#88ccff', glow:'rgba(30,120,255,.7)' },
+  wood:    { id:'wood',    name:'木',     color:'#1eaa38', dark:'#005515', light:'#88ee99', glow:'rgba(30,200,60,.7)' },
+  light:   { id:'light',   name:'光',     color:'#e8c81a', dark:'#7a6000', light:'#fffaaa', glow:'rgba(255,230,30,.7)' },
+  dark:    { id:'dark',    name:'闇',     color:'#8833dd', dark:'#3a006b', light:'#cc99ff', glow:'rgba(160,60,255,.7)' },
+  heal:    { id:'heal',    name:'回復',   color:'#e8508a', dark:'#7a1040', light:'#ffaad0', glow:'rgba(255,80,150,.7)' },
+  poison:  { id:'poison',  name:'毒',     color:'#7aaa10', dark:'#3a5000', light:'#ccee66', glow:'rgba(140,200,10,.7)' },
+  jammer:  { id:'jammer',  name:'邪魔',   color:'#7070a0', dark:'#303050', light:'#aaaacc', glow:'rgba(120,120,180,.7)' },
+  bomb:    { id:'bomb',    name:'爆弾',   color:'#cc6010', dark:'#6a2800', light:'#ffaa66', glow:'rgba(220,120,20,.7)' },
 };
 
-const STANDARD_DROPS = ['fire','water','wood','light','dark','heal'];
-const ALL_DROPS = Object.keys(DROP_TYPES);
+const STANDARD = ['fire','water','wood','light','dark','heal'];
+const ALL_DROPS = Object.keys(DROP);
 
-// ========== ゲーム状態 ==========
-let state = {
-  cols: 6,
-  rows: 5,
-  board: [],           // 現在のボード [row][col] = drop_id
-  initialBoard: [],    // リセット用
-  activeDrops: STANDARD_DROPS.slice(), // 使用中のドロップ種類
+// ========== 状態 ==========
+let G = {
+  cols: 6, rows: 5,
+  board: [],
+  initBoard: [],
   dragging: false,
-  dragCell: null,      // {row, col}
-  heldDrop: null,      // ドラッグ中のドロップID
-  moveHistory: [],     // [{from, to, swapped}]
+  dragCell: null,
+  heldDrop: null,
+  history: [],
   moveCount: 0,
-  moveLimit: 0,
+  timeLimit: 0,   // 0=無制限
   timerRunning: false,
-  timerStart: null,
+  timerStart: 0,
   timerElapsed: 0,
-  timerInterval: null,
+  timerTick: null,
   combos: [],
+  // カスタムモード
+  customMode: false,
+  customDrop: 'fire',
+  customPainting: false,
+  // 陣選択
+  jinN: 0,
+  jinSelected: [],
+  // アニメーション
+  erasingCells: [],  // [{r,c,drop,progress}]
+  eraseAnim: null,
+  // 再生
   replayMode: false,
+  replayBoards: [],
+  replayPaths: [],   // 手順ごとの移動座標
   replayStep: 0,
+  replayPlaying: false,
+  replayInterval: null,
+  showTrail: true,
 };
 
-// ========== Canvas セットアップ ==========
+// ========== Canvas ==========
 const canvas = document.getElementById('puzzle-board');
 const ctx = canvas.getContext('2d');
-let CELL_SIZE = 80;
+let CS = 72; // cell size
 
-function updateCanvasSize() {
-  const maxW = Math.min(document.body.clientWidth - 32, 700);
-  CELL_SIZE = Math.floor(maxW / state.cols);
-  canvas.width  = CELL_SIZE * state.cols;
-  canvas.height = CELL_SIZE * state.rows;
+function resizeCanvas() {
+  const maxW = Math.min(document.body.clientWidth - 24, 540);
+  CS = Math.floor(maxW / G.cols);
+  canvas.width  = CS * G.cols;
+  canvas.height = CS * G.rows;
   canvas.style.width  = canvas.width  + 'px';
   canvas.style.height = canvas.height + 'px';
 }
 
 // ========== ドロップ描画 ==========
-function drawDrop(ctx, x, y, size, typeId, options = {}) {
-  if (!typeId || typeId === 'empty') return;
-  const drop = DROP_TYPES[typeId];
-  if (!drop) return;
-  const { scale = 1, alpha = 1, selected = false } = options;
-  const cx = x + size / 2;
-  const cy = y + size / 2;
-  const r = (size * 0.43) * scale;
+function drawDrop(x, y, typeId, opts = {}) {
+  const { scale = 1, alpha = 1, lifted = false, eraseAlpha = 1 } = opts;
+  if (!typeId) return;
+  const d = DROP[typeId];
+  if (!d) return;
+
+  const cx = x + CS / 2;
+  const cy = y + CS / 2;
+  const baseR = CS * 0.44;
+  const r = baseR * scale;
 
   ctx.save();
-  ctx.globalAlpha = alpha;
+  ctx.globalAlpha = alpha * eraseAlpha;
 
-  // グロー
-  if (selected) {
-    const glow = ctx.createRadialGradient(cx, cy, r * 0.3, cx, cy, r * 1.8);
-    glow.addColorStop(0, drop.color + 'aa');
+  // 浮いてる時の影
+  if (lifted) {
+    ctx.shadowColor = d.glow;
+    ctx.shadowBlur = 20;
+  }
+
+  // 外周光 (lifted時)
+  if (lifted) {
+    const glow = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, r * 1.6);
+    glow.addColorStop(0, d.glow);
     glow.addColorStop(1, 'transparent');
-    ctx.fillStyle = glow;
     ctx.beginPath();
-    ctx.arc(cx, cy, r * 1.8, 0, Math.PI * 2);
+    ctx.arc(cx, cy, r * 1.6, 0, Math.PI * 2);
+    ctx.fillStyle = glow;
     ctx.fill();
   }
 
-  // ドロップ本体（グラデーション球）
-  const grad = ctx.createRadialGradient(cx - r * 0.25, cy - r * 0.25, r * 0.1, cx, cy, r);
-  grad.addColorStop(0, lightenColor(drop.color, 60));
-  grad.addColorStop(0.45, drop.color);
-  grad.addColorStop(1, darkenColor(drop.color, 40));
-
+  // ベース球体
+  const grad = ctx.createRadialGradient(
+    cx - r * 0.22, cy - r * 0.28, r * 0.05,
+    cx, cy, r
+  );
+  grad.addColorStop(0, d.light);
+  grad.addColorStop(0.38, d.color);
+  grad.addColorStop(1, d.dark);
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.fillStyle = grad;
+  ctx.shadowColor = lifted ? d.glow : 'rgba(0,0,0,.5)';
+  ctx.shadowBlur = lifted ? 16 : 4;
   ctx.fill();
+  ctx.shadowBlur = 0;
 
-  // ハイライト
-  const hl = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.35, 0, cx - r * 0.2, cy - r * 0.25, r * 0.55);
-  hl.addColorStop(0, 'rgba(255,255,255,0.7)');
+  // ハイライト（上部白丸）
+  const hl = ctx.createRadialGradient(
+    cx - r * 0.28, cy - r * 0.32, 0,
+    cx - r * 0.18, cy - r * 0.22, r * 0.52
+  );
+  hl.addColorStop(0, 'rgba(255,255,255,.78)');
+  hl.addColorStop(0.6, 'rgba(255,255,255,.18)');
   hl.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.fillStyle = hl;
   ctx.fill();
 
-  // 縁取り
+  // 下部の反射光
+  const refl = ctx.createRadialGradient(cx, cy + r * 0.55, 0, cx, cy + r * 0.55, r * 0.45);
+  refl.addColorStop(0, 'rgba(255,255,255,.22)');
+  refl.addColorStop(1, 'rgba(255,255,255,0)');
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-  ctx.lineWidth = 1.5;
+  ctx.fillStyle = refl;
+  ctx.fill();
+
+  // 縁
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(0,0,0,.35)';
+  ctx.lineWidth = 1.2;
   ctx.stroke();
 
   // テキスト
-  ctx.fillStyle = 'rgba(255,255,255,0.95)';
-  ctx.shadowColor = 'rgba(0,0,0,0.7)';
-  ctx.shadowBlur = 4;
-  const fontSize = Math.max(10, Math.round(size * 0.2));
-  ctx.font = `bold ${fontSize}px 'Noto Sans JP', sans-serif`;
+  ctx.shadowBlur = 0;
+  const fs = Math.max(9, Math.round(CS * 0.185));
+  ctx.font = `bold ${fs}px 'Noto Sans JP', sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(drop.name, cx, cy + r * 0.55);
+  ctx.fillStyle = 'rgba(255,255,255,.92)';
+  ctx.shadowColor = 'rgba(0,0,0,.85)';
+  ctx.shadowBlur = 3;
+  ctx.fillText(d.name, cx, cy + r * 0.54);
   ctx.shadowBlur = 0;
 
   ctx.restore();
 }
 
-function lightenColor(hex, amount) {
-  const r = Math.min(255, parseInt(hex.slice(1,3),16) + amount);
-  const g = Math.min(255, parseInt(hex.slice(3,5),16) + amount);
-  const b = Math.min(255, parseInt(hex.slice(5,7),16) + amount);
-  return `rgb(${r},${g},${b})`;
-}
-function darkenColor(hex, amount) {
-  const r = Math.max(0, parseInt(hex.slice(1,3),16) - amount);
-  const g = Math.max(0, parseInt(hex.slice(3,5),16) - amount);
-  const b = Math.max(0, parseInt(hex.slice(5,7),16) - amount);
-  return `rgb(${r},${g},${b})`;
-}
-
 // ========== ボード描画 ==========
-let dragPixel = null; // {x, y} canvas座標
+let dragPixel = null;
+let animFrame = null;
 
 function render() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   // 背景
-  const bg = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-  bg.addColorStop(0, '#0d1528');
-  bg.addColorStop(1, '#131e35');
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const bgGrad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+  bgGrad.addColorStop(0, '#0c1525');
+  bgGrad.addColorStop(1, '#121e35');
+  ctx.fillStyle = bgGrad;
+  ctx.roundRect(0, 0, canvas.width, canvas.height, 10);
+  ctx.fill();
 
-  // グリッドライン
-  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  // グリッド
+  ctx.strokeStyle = 'rgba(255,255,255,.07)';
   ctx.lineWidth = 1;
-  for (let r = 0; r <= state.rows; r++) {
-    ctx.beginPath();
-    ctx.moveTo(0, r * CELL_SIZE);
-    ctx.lineTo(canvas.width, r * CELL_SIZE);
-    ctx.stroke();
+  for (let r = 0; r <= G.rows; r++) {
+    ctx.beginPath(); ctx.moveTo(0, r * CS); ctx.lineTo(canvas.width, r * CS); ctx.stroke();
   }
-  for (let c = 0; c <= state.cols; c++) {
-    ctx.beginPath();
-    ctx.moveTo(c * CELL_SIZE, 0);
-    ctx.lineTo(c * CELL_SIZE, canvas.height);
-    ctx.stroke();
+  for (let c = 0; c <= G.cols; c++) {
+    ctx.beginPath(); ctx.moveTo(c * CS, 0); ctx.lineTo(c * CS, canvas.height); ctx.stroke();
   }
 
-  // ドロップ描画（ドラッグ中のものは除く）
-  for (let r = 0; r < state.rows; r++) {
-    for (let c = 0; c < state.cols; c++) {
-      const isHeld = state.dragging && state.dragCell?.row === r && state.dragCell?.col === c;
+  // 再生モード：軌跡ライン
+  if (G.replayMode && G.showTrail && G.replayStep > 0) {
+    drawTrail();
+  }
+
+  // ドロップ（ドラッグ中のセルを除く）
+  for (let r = 0; r < G.rows; r++) {
+    for (let c = 0; c < G.cols; c++) {
+      const isHeld = G.dragging && G.dragCell && G.dragCell.r === r && G.dragCell.c === c;
       if (isHeld) continue;
-      const drop = state.board[r][c];
-      if (drop) {
-        drawDrop(ctx, c * CELL_SIZE, r * CELL_SIZE, CELL_SIZE, drop);
+      const drop = G.board[r][c];
+      if (!drop) continue;
+
+      // 消去アニメーション中？
+      const ea = G.erasingCells.find(e => e.r === r && e.c === c);
+      if (ea) {
+        drawDrop(c * CS, r * CS, ea.drop, { eraseAlpha: 1 - ea.progress, scale: 1 - ea.progress * 0.4 });
+      } else {
+        drawDrop(c * CS, r * CS, drop);
       }
     }
   }
 
-  // ドラッグ中のドロップ（最前面）
-  if (state.dragging && dragPixel && state.heldDrop) {
+  // ドラッグ中ドロップ（最前面・浮く）
+  if (G.dragging && dragPixel && G.heldDrop) {
     drawDrop(
-      ctx,
-      dragPixel.x - CELL_SIZE / 2,
-      dragPixel.y - CELL_SIZE / 2,
-      CELL_SIZE,
-      state.heldDrop,
-      { scale: 1.15, selected: true }
+      dragPixel.x - CS / 2,
+      dragPixel.y - CS / 2,
+      G.heldDrop,
+      { scale: 1.18, lifted: true }
     );
   }
+
+  // カスタムモード：選択中ドロップのハイライト枠
+  if (G.customMode && !G.dragging && !G.replayMode) {
+    ctx.strokeStyle = 'rgba(255,255,255,.3)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    for (let r = 0; r < G.rows; r++) {
+      for (let c = 0; c < G.cols; c++) {
+        ctx.strokeRect(c * CS + 1, r * CS + 1, CS - 2, CS - 2);
+      }
+    }
+    ctx.setLineDash([]);
+  }
+}
+
+// 軌跡描画
+function drawTrail() {
+  if (G.replayStep === 0 || !G.replayPaths || G.replayPaths.length === 0) return;
+  const path = G.replayPaths.slice(0, G.replayStep);
+  if (path.length < 2) return;
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255, 220, 50, 0.75)';
+  ctx.lineWidth = CS * 0.12;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.shadowColor = 'rgba(255,200,0,.5)';
+  ctx.shadowBlur = 8;
+
+  ctx.beginPath();
+  ctx.moveTo(path[0].c * CS + CS / 2, path[0].r * CS + CS / 2);
+  for (let i = 1; i < path.length; i++) {
+    ctx.lineTo(path[i].c * CS + CS / 2, path[i].r * CS + CS / 2);
+  }
+  ctx.stroke();
+
+  // 始点マーク
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = 'rgba(255,255,255,.9)';
+  ctx.beginPath();
+  ctx.arc(path[0].c * CS + CS / 2, path[0].r * CS + CS / 2, CS * 0.1, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+function scheduleRender() {
+  if (animFrame) cancelAnimationFrame(animFrame);
+  animFrame = requestAnimationFrame(() => { animFrame = null; render(); });
 }
 
 // ========== ボード生成 ==========
-function generateBoard(preset = null) {
-  const { rows, cols, activeDrops } = state;
-  const board = [];
-  const drops = preset ? buildPreset(preset, rows, cols) : null;
-  for (let r = 0; r < rows; r++) {
-    board.push([]);
-    for (let c = 0; c < cols; c++) {
-      board[r].push(drops ? drops[r][c] : randomDrop(activeDrops));
-    }
+function cloneBoard(b) { return b.map(r => r.slice()); }
+
+function randomDrop(drops) { return drops[Math.floor(Math.random() * drops.length)]; }
+
+function shuffle(a) {
+  const s = a.slice();
+  for (let i = s.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [s[i], s[j]] = [s[j], s[i]];
   }
-  return board;
+  return s;
 }
 
-function randomDrop(drops) {
-  return drops[Math.floor(Math.random() * drops.length)];
+function buildBoard(drops) {
+  return Array.from({ length: G.rows }, () =>
+    Array.from({ length: G.cols }, () => randomDrop(drops))
+  );
 }
 
-// ========== プリセット生成 ==========
-function buildPreset(name, rows, cols) {
-  const b = Array.from({length: rows}, () => Array(cols).fill('fire'));
-
-  const fill = (dropList) => {
-    for (let r = 0; r < rows; r++)
-      for (let c = 0; c < cols; c++)
-        b[r][c] = randomDrop(dropList);
-  };
-
-  const fillPattern = (pattern) => {
-    for (let r = 0; r < rows; r++)
-      for (let c = 0; c < cols; c++) {
-        const idx = (r * cols + c) % pattern.length;
-        b[r][c] = pattern[idx];
-      }
-  };
-
-  switch(name) {
-    case 'random': fill(state.activeDrops); break;
-
-    case '3color': {
-      const picks = shuffle(STANDARD_DROPS).slice(0,3);
-      fill(picks); break;
-    }
-    case '4color': {
-      const picks = shuffle(STANDARD_DROPS).slice(0,4);
-      fill(picks); break;
-    }
-    case '5color': {
-      const picks = shuffle(STANDARD_DROPS).slice(0,5);
-      fill(picks); break;
-    }
-    case '6color':
-      fill(['fire','water','wood','light','dark','heal']); break;
-
-    case '7color':
-      fill(['fire','water','wood','light','dark','heal','poison']); break;
-
-    case 'healrow': {
-      fill(['fire','water','wood','light','dark']);
-      // 最下段を回復で埋める
-      for (let c = 0; c < cols; c++) b[rows-1][c] = 'heal';
-      break;
-    }
-    case 'firerow': {
-      fill(['water','wood','light','dark','heal']);
-      for (let c = 0; c < cols; c++) b[rows-1][c] = 'fire';
-      break;
-    }
-    case 'cross': {
-      fill(['fire','water','wood','dark','heal']);
-      const midRow = Math.floor(rows/2);
-      const midCol = Math.floor(cols/2);
-      for (let c = 0; c < cols; c++) b[midRow][c] = 'light';
-      for (let r = 0; r < rows; r++) b[r][midCol] = 'light';
-      break;
-    }
-    case 'checker': {
-      for (let r = 0; r < rows; r++)
-        for (let c = 0; c < cols; c++)
-          b[r][c] = (r + c) % 2 === 0 ? 'fire' : 'water';
-      break;
-    }
-    default: fill(state.activeDrops);
-  }
-  return b;
+// ========== ゲーム操作 ==========
+function newGame(drops) {
+  stopTimer();
+  G.board = buildBoard(drops || STANDARD);
+  G.initBoard = cloneBoard(G.board);
+  G.history = [];
+  G.moveCount = 0;
+  G.combos = [];
+  G.erasingCells = [];
+  resetTimer();
+  updateMoveUI();
+  updateComboUI();
+  scheduleRender();
 }
 
-function shuffle(arr) {
-  const a = arr.slice();
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i+1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
+function resetGame() {
+  stopTimer();
+  G.board = cloneBoard(G.initBoard);
+  G.history = [];
+  G.moveCount = 0;
+  G.combos = [];
+  G.erasingCells = [];
+  resetTimer();
+  updateMoveUI();
+  updateComboUI();
+  scheduleRender();
 }
 
-// ========== ドラッグ操作 ==========
-function getCell(px, py) {
-  const c = Math.floor(px / CELL_SIZE);
-  const r = Math.floor(py / CELL_SIZE);
-  if (r < 0 || r >= state.rows || c < 0 || c >= state.cols) return null;
-  return { row: r, col: c };
-}
-
-function getCanvasPos(e) {
+function getPos(e) {
   const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-  return {
-    x: (clientX - rect.left) * scaleX,
-    y: (clientY - rect.top) * scaleY,
-  };
+  const sx = canvas.width / rect.width;
+  const sy = canvas.height / rect.height;
+  const src = e.touches ? e.touches[0] : e;
+  return { x: (src.clientX - rect.left) * sx, y: (src.clientY - rect.top) * sy };
 }
 
-canvas.addEventListener('mousedown',  onDragStart);
-canvas.addEventListener('touchstart', onDragStart, { passive: false });
-canvas.addEventListener('mousemove',  onDragMove);
-canvas.addEventListener('touchmove',  onDragMove, { passive: false });
-canvas.addEventListener('mouseup',    onDragEnd);
-canvas.addEventListener('touchend',   onDragEnd);
-canvas.addEventListener('mouseleave', onDragEnd);
+function posToCell(px, py) {
+  const c = Math.floor(px / CS), r = Math.floor(py / CS);
+  if (r < 0 || r >= G.rows || c < 0 || c >= G.cols) return null;
+  return { r, c };
+}
 
-function onDragStart(e) {
-  if (state.replayMode) return;
+// ===== ドラッグ =====
+canvas.addEventListener('mousedown',  onStart, false);
+canvas.addEventListener('touchstart', onStart, { passive: false });
+canvas.addEventListener('mousemove',  onMove,  false);
+canvas.addEventListener('touchmove',  onMove,  { passive: false });
+canvas.addEventListener('mouseup',    onEnd,   false);
+canvas.addEventListener('touchend',   onEnd,   false);
+canvas.addEventListener('mouseleave', onEnd,   false);
+
+function onStart(e) {
   e.preventDefault();
-  const pos = getCanvasPos(e);
-  const cell = getCell(pos.x, pos.y);
+  const pos = getPos(e);
+  const cell = posToCell(pos.x, pos.y);
   if (!cell) return;
-  state.dragging = true;
-  state.dragCell = { ...cell };
-  state.heldDrop = state.board[cell.row][cell.col];
-  state.board[cell.row][cell.col] = null;
+
+  // カスタムモード
+  if (G.customMode) {
+    G.customPainting = true;
+    G.board[cell.r][cell.c] = G.customDrop;
+    scheduleRender();
+    return;
+  }
+
+  if (G.replayMode) return;
+
+  // 通常ドラッグ
+  G.dragging = true;
+  G.dragCell = { ...cell };
+  G.heldDrop = G.board[cell.r][cell.c];
+  G.board[cell.r][cell.c] = null;
   dragPixel = { x: pos.x, y: pos.y };
-
-  // タイマー開始
-  if (!state.timerRunning) startTimer();
-
-  render();
+  if (!G.timerRunning) startTimer();
+  scheduleRender();
 }
 
-function onDragMove(e) {
-  if (!state.dragging) return;
+function onMove(e) {
   e.preventDefault();
-  const pos = getCanvasPos(e);
+  const pos = getPos(e);
+
+  if (G.customPainting) {
+    const cell = posToCell(pos.x, pos.y);
+    if (cell) G.board[cell.r][cell.c] = G.customDrop;
+    scheduleRender();
+    return;
+  }
+
+  if (!G.dragging) return;
   dragPixel = { x: pos.x, y: pos.y };
 
-  const cell = getCell(pos.x, pos.y);
-  if (cell && (cell.row !== state.dragCell.row || cell.col !== state.dragCell.col)) {
-    // 移動先のドロップを元の位置に置く（入れ替え）
-    const swappedDrop = state.board[cell.row][cell.col];
-    state.board[state.dragCell.row][state.dragCell.col] = swappedDrop;
-    state.board[cell.row][cell.col] = null;
-
-    state.moveHistory.push({
-      from: { ...state.dragCell },
-      to: { ...cell },
-      swapped: swappedDrop,
-    });
-    state.dragCell = { ...cell };
-    state.moveCount++;
-    updateMoveCount();
+  const cell = posToCell(pos.x, pos.y);
+  if (cell && (cell.r !== G.dragCell.r || cell.c !== G.dragCell.c)) {
+    const swapped = G.board[cell.r][cell.c];
+    G.board[G.dragCell.r][G.dragCell.c] = swapped;
+    G.board[cell.r][cell.c] = null;
+    G.history.push({ from: { ...G.dragCell }, to: { ...cell }, swapped });
+    G.dragCell = { ...cell };
+    G.moveCount++;
+    updateMoveUI();
   }
-
-  render();
+  scheduleRender();
 }
 
-function onDragEnd(e) {
-  if (!state.dragging) return;
-  state.dragging = false;
-
-  if (state.dragCell) {
-    state.board[state.dragCell.row][state.dragCell.col] = state.heldDrop;
+function onEnd(e) {
+  if (G.customPainting) {
+    G.customPainting = false;
+    calcCombos();
+    scheduleRender();
+    return;
   }
-  state.heldDrop = null;
-  state.dragCell = null;
+  if (!G.dragging) return;
+  G.dragging = false;
+  if (G.dragCell) G.board[G.dragCell.r][G.dragCell.c] = G.heldDrop;
+  G.heldDrop = null;
+  G.dragCell = null;
   dragPixel = null;
-
-  render();
   calcCombos();
+  scheduleRender();
 }
 
 // ========== コンボ計算 ==========
 function calcCombos() {
-  const { rows, cols, board } = state;
-  const visited = Array.from({length: rows}, () => Array(cols).fill(false));
-  const combos = [];
+  const { rows, cols, board } = G;
+  // 3つ以上の塊を検出（横3 or 縦3以上の直線グループをfloodFill）
+  const matched = Array.from({ length: rows }, () => Array(cols).fill(false));
 
-  // 連鎖チェック
+  // まず横・縦の3連以上をマーク
   for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      if (visited[r][c] || !board[r][c]) continue;
-      const type = board[r][c];
-      const group = [];
-      floodFill(r, c, type, visited, group, board, rows, cols);
-      if (group.length >= 3) {
-        combos.push({ type, cells: group, count: group.length });
+    for (let c = 0; c < cols - 2; c++) {
+      const t = board[r][c];
+      if (!t) continue;
+      if (board[r][c+1] === t && board[r][c+2] === t) {
+        let end = c + 2;
+        while (end + 1 < cols && board[r][end+1] === t) end++;
+        for (let i = c; i <= end; i++) matched[r][i] = true;
+      }
+    }
+  }
+  for (let c = 0; c < cols; c++) {
+    for (let r = 0; r < rows - 2; r++) {
+      const t = board[r][c];
+      if (!t) continue;
+      if (board[r+1][c] === t && board[r+2][c] === t) {
+        let end = r + 2;
+        while (end + 1 < rows && board[end+1][c] === t) end++;
+        for (let i = r; i <= end; i++) matched[i][c] = true;
       }
     }
   }
 
-  state.combos = combos;
-  updateComboDisplay();
-}
+  // matchedをfloodFillでグループ化
+  const visited = Array.from({ length: rows }, () => Array(cols).fill(false));
+  const combos = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (!matched[r][c] || visited[r][c]) continue;
+      const type = board[r][c];
+      const cells = [];
+      const stack = [{ r, c }];
+      while (stack.length) {
+        const { r: cr, c: cc } = stack.pop();
+        if (cr < 0 || cr >= rows || cc < 0 || cc >= cols) continue;
+        if (visited[cr][cc] || !matched[cr][cc] || board[cr][cc] !== type) continue;
+        visited[cr][cc] = true;
+        cells.push({ r: cr, c: cc });
+        stack.push({ r: cr+1, c: cc }, { r: cr-1, c: cc }, { r: cr, c: cc+1 }, { r: cr, c: cc-1 });
+      }
+      combos.push({ type, cells });
+    }
+  }
 
-function floodFill(r, c, type, visited, group, board, rows, cols) {
-  if (r < 0 || r >= rows || c < 0 || c >= cols) return;
-  if (visited[r][c] || board[r][c] !== type) return;
-  // 3つ以上繋がりチェック（横・縦の直線3つ以上を基準）
-  visited[r][c] = true;
-  group.push({ r, c });
-  floodFill(r+1, c, type, visited, group, board, rows, cols);
-  floodFill(r-1, c, type, visited, group, board, rows, cols);
-  floodFill(r, c+1, type, visited, group, board, rows, cols);
-  floodFill(r, c-1, type, visited, group, board, rows, cols);
-}
+  G.combos = combos;
+  updateComboUI();
 
-// ========== コンボ表示更新 ==========
-function updateComboDisplay() {
-  document.getElementById('combo-count').textContent = state.combos.length;
-
-  const list = document.getElementById('combo-list');
-  list.innerHTML = '';
-  state.combos.forEach(combo => {
-    const drop = DROP_TYPES[combo.type];
-    const badge = document.createElement('div');
-    badge.className = 'combo-badge';
-    badge.innerHTML = `
-      <div class="badge-dot" style="background:${drop.color}"></div>
-      <span>${drop.name} ${combo.count}個</span>
-    `;
-    list.appendChild(badge);
-  });
-
-  if (state.combos.length >= 3) {
-    showComboPopup(state.combos.length);
+  if (combos.length > 0) {
+    animateErase(combos);
   }
 }
 
-function showComboPopup(n) {
-  const popup = document.getElementById('combo-popup');
-  popup.textContent = `${n} コンボ！`;
-  popup.classList.remove('hidden');
-  clearTimeout(popup._timeout);
-  popup._timeout = setTimeout(() => popup.classList.add('hidden'), 1800);
+// ========== 消去アニメーション ==========
+function animateErase(combos) {
+  const cells = combos.flatMap(c => c.cells.map(cell => ({
+    ...cell,
+    drop: G.board[cell.r][cell.c],
+    progress: 0,
+  })));
+  G.erasingCells = cells;
+
+  const duration = 420; // ms
+  const start = performance.now();
+
+  function tick(now) {
+    const t = Math.min((now - start) / duration, 1);
+    G.erasingCells.forEach(e => e.progress = t);
+    scheduleRender();
+    if (t < 1) {
+      G.eraseAnim = requestAnimationFrame(tick);
+    } else {
+      G.erasingCells = [];
+      scheduleRender();
+    }
+  }
+  if (G.eraseAnim) cancelAnimationFrame(G.eraseAnim);
+  G.eraseAnim = requestAnimationFrame(tick);
+}
+
+// ========== UI 更新 ==========
+function updateMoveUI() {
+  document.getElementById('move-count').textContent = G.moveCount;
+}
+
+function updateComboUI() {
+  document.getElementById('combo-count').textContent = G.combos.length;
+  const list = document.getElementById('combo-list');
+  list.innerHTML = '';
+  G.combos.forEach(combo => {
+    const d = DROP[combo.type];
+    const badge = document.createElement('div');
+    badge.className = 'combo-badge';
+    badge.innerHTML = `<div class="badge-dot" style="background:${d.color}"></div><span>${d.name} ${combo.cells.length}個</span>`;
+    list.appendChild(badge);
+  });
 }
 
 // ========== タイマー ==========
 function startTimer() {
-  state.timerRunning = true;
-  state.timerStart = Date.now() - state.timerElapsed * 1000;
-  state.timerInterval = setInterval(() => {
-    state.timerElapsed = (Date.now() - state.timerStart) / 1000;
-    document.getElementById('timer').textContent = state.timerElapsed.toFixed(1);
-  }, 100);
+  G.timerRunning = true;
+  G.timerStart = Date.now() - G.timerElapsed * 1000;
+  G.timerTick = setInterval(tickTimer, 100);
+}
+
+function tickTimer() {
+  G.timerElapsed = (Date.now() - G.timerStart) / 1000;
+  const el = document.getElementById('timer-display');
+  el.textContent = G.timerElapsed.toFixed(1);
+
+  const bar = document.getElementById('timer-bar');
+  if (G.timeLimit > 0) {
+    const pct = Math.max(0, 1 - G.timerElapsed / G.timeLimit);
+    bar.style.width = (pct * 100) + '%';
+    bar.classList.toggle('warning', pct < 0.3);
+    if (G.timerElapsed >= G.timeLimit) {
+      stopTimer();
+      el.style.color = 'var(--danger)';
+    }
+  } else {
+    bar.style.width = '100%';
+  }
 }
 
 function stopTimer() {
-  clearInterval(state.timerInterval);
-  state.timerRunning = false;
+  clearInterval(G.timerTick);
+  G.timerRunning = false;
 }
 
 function resetTimer() {
   stopTimer();
-  state.timerElapsed = 0;
-  state.timerRunning = false;
-  document.getElementById('timer').textContent = '0.0';
+  G.timerElapsed = 0;
+  document.getElementById('timer-display').textContent = '0.0';
+  document.getElementById('timer-display').style.color = '';
+  document.getElementById('timer-bar').style.width = '100%';
+  document.getElementById('timer-bar').classList.remove('warning');
 }
 
-// ========== 手数表示更新 ==========
-function updateMoveCount() {
-  const el = document.getElementById('move-count');
-  el.textContent = state.moveCount;
-  if (state.moveLimit > 0 && state.moveCount >= state.moveLimit) {
-    el.style.color = 'var(--danger)';
-  } else {
-    el.style.color = '';
-  }
-}
-
-// ========== ボードをディープコピー ==========
-function cloneBoard(b) {
-  return b.map(row => row.slice());
-}
-
-// ========== ボタン操作 ==========
-document.getElementById('btn-new').addEventListener('click', () => {
-  newBoard();
-});
-
-document.getElementById('btn-reset').addEventListener('click', () => {
-  resetBoard();
-});
-
+// ========== ボタン ==========
+document.getElementById('btn-new-random').addEventListener('click', () => newGame(STANDARD));
+document.getElementById('btn-reset').addEventListener('click', resetGame);
 document.getElementById('btn-undo').addEventListener('click', () => {
-  undoMove();
-});
-
-document.getElementById('btn-replay').addEventListener('click', () => {
-  startReplay();
-});
-
-function newBoard(preset = null) {
-  stopTimer();
-  state.board = generateBoard(preset);
-  state.initialBoard = cloneBoard(state.board);
-  state.moveHistory = [];
-  state.moveCount = 0;
-  state.combos = [];
-  resetTimer();
-  updateMoveCount();
-  updateComboDisplay();
-  document.getElementById('combo-popup').classList.add('hidden');
-  render();
-}
-
-function resetBoard() {
-  stopTimer();
-  state.board = cloneBoard(state.initialBoard);
-  state.moveHistory = [];
-  state.moveCount = 0;
-  state.combos = [];
-  resetTimer();
-  updateMoveCount();
-  updateComboDisplay();
-  document.getElementById('combo-popup').classList.add('hidden');
-  render();
-}
-
-function undoMove() {
-  if (state.moveHistory.length === 0) return;
-  const last = state.moveHistory.pop();
-  // 入れ替えを戻す
-  state.board[last.from.row][last.from.col] = state.board[last.to.row][last.to.col];
-  state.board[last.to.row][last.to.col] = last.swapped;
-  state.moveCount = Math.max(0, state.moveCount - 1);
-  updateMoveCount();
+  if (!G.history.length) return;
+  const last = G.history.pop();
+  G.board[last.from.r][last.from.c] = G.board[last.to.r][last.to.c];
+  G.board[last.to.r][last.to.c] = last.swapped;
+  G.moveCount = Math.max(0, G.moveCount - 1);
+  updateMoveUI();
   calcCombos();
-  render();
-}
-
-// ========== リプレイ ==========
-let replayBoards = [];
-
-function startReplay() {
-  if (state.moveHistory.length === 0) return;
-
-  // 全手順を再現
-  replayBoards = [cloneBoard(state.initialBoard)];
-  const tempBoard = cloneBoard(state.initialBoard);
-  for (const move of state.moveHistory) {
-    const tmp = tempBoard[move.to.row][move.to.col];
-    tempBoard[move.to.row][move.to.col] = tempBoard[move.from.row][move.from.col];
-    tempBoard[move.from.row][move.from.col] = tmp;
-    replayBoards.push(cloneBoard(tempBoard));
-  }
-
-  state.replayMode = true;
-  state.replayStep = 0;
-  document.getElementById('replay-controls').classList.remove('hidden');
-  updateReplayStep();
-}
-
-function updateReplayStep() {
-  const max = replayBoards.length - 1;
-  state.board = cloneBoard(replayBoards[state.replayStep]);
-  document.getElementById('replay-step').textContent = `${state.replayStep} / ${max}`;
-  render();
-}
-
-document.getElementById('btn-replay-prev').addEventListener('click', () => {
-  state.replayStep = Math.max(0, state.replayStep - 1);
-  updateReplayStep();
-});
-
-document.getElementById('btn-replay-next').addEventListener('click', () => {
-  state.replayStep = Math.min(replayBoards.length - 1, state.replayStep + 1);
-  updateReplayStep();
-});
-
-let replayAutoInterval = null;
-document.getElementById('btn-replay-play').addEventListener('click', () => {
-  if (replayAutoInterval) {
-    clearInterval(replayAutoInterval);
-    replayAutoInterval = null;
-    document.getElementById('btn-replay-play').textContent = '▶';
-    return;
-  }
-  document.getElementById('btn-replay-play').textContent = '⏸';
-  replayAutoInterval = setInterval(() => {
-    if (state.replayStep >= replayBoards.length - 1) {
-      clearInterval(replayAutoInterval);
-      replayAutoInterval = null;
-      document.getElementById('btn-replay-play').textContent = '▶';
-      return;
-    }
-    state.replayStep++;
-    updateReplayStep();
-  }, 400);
-});
-
-document.getElementById('btn-replay-close').addEventListener('click', () => {
-  clearInterval(replayAutoInterval);
-  replayAutoInterval = null;
-  state.replayMode = false;
-  document.getElementById('replay-controls').classList.add('hidden');
-  state.board = cloneBoard(replayBoards[replayBoards.length - 1]);
-  render();
-  calcCombos();
+  scheduleRender();
 });
 
 // ========== 設定パネル ==========
-const settingsPanel = document.getElementById('settings-panel');
-
-// オーバーレイ追加
-const overlay = document.createElement('div');
-overlay.id = 'settings-overlay';
-document.getElementById('app').appendChild(overlay);
-
 document.getElementById('btn-settings').addEventListener('click', () => {
-  settingsPanel.classList.toggle('hidden');
-  overlay.classList.toggle('active');
+  document.getElementById('settings-panel').classList.remove('hidden');
+  document.getElementById('settings-overlay').classList.remove('hidden');
 });
-overlay.addEventListener('click', () => {
-  settingsPanel.classList.add('hidden');
-  overlay.classList.remove('active');
-});
+function closeSettings() {
+  document.getElementById('settings-panel').classList.add('hidden');
+  document.getElementById('settings-overlay').classList.add('hidden');
+}
+document.getElementById('btn-settings-close').addEventListener('click', closeSettings);
+document.getElementById('settings-overlay').addEventListener('click', closeSettings);
 
-// サイズボタン
 document.querySelectorAll('.size-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.size-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    state.cols = parseInt(btn.dataset.cols);
-    state.rows = parseInt(btn.dataset.rows);
-    updateCanvasSize();
-    newBoard();
+    G.cols = parseInt(btn.dataset.cols);
+    G.rows = parseInt(btn.dataset.rows);
+    resizeCanvas();
+    newGame();
   });
 });
 
-// プリセットボタン
-document.querySelectorAll('.preset-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    newBoard(btn.dataset.preset);
-    settingsPanel.classList.add('hidden');
-    overlay.classList.remove('active');
-  });
+document.getElementById('time-limit-input').addEventListener('change', e => {
+  G.timeLimit = Math.max(0, parseInt(e.target.value) || 0);
+  resetTimer();
 });
 
-// 移動制限
-document.getElementById('move-limit').addEventListener('change', (e) => {
-  state.moveLimit = parseInt(e.target.value);
-});
+// ========== 陣選択 ==========
+const JIN_COLORS = STANDARD; // 陣は6標準色から選ぶ
 
-// 適用ボタン
-document.getElementById('btn-apply-settings').addEventListener('click', () => {
-  settingsPanel.classList.add('hidden');
-  overlay.classList.remove('active');
-  newBoard();
-});
+function buildJinColorPicker(n) {
+  G.jinN = n;
+  G.jinSelected = [];
+  const list = document.getElementById('jin-color-list');
+  list.innerHTML = '';
+  document.getElementById('jin-need-count').textContent = n;
 
-// ========== カラーパレット設定 ==========
-function buildColorPalette() {
-  const palette = document.getElementById('color-palette');
-  palette.innerHTML = '';
-  ALL_DROPS.forEach(id => {
-    const drop = DROP_TYPES[id];
+  JIN_COLORS.forEach(id => {
+    const d = DROP[id];
     const chip = document.createElement('div');
-    chip.className = 'color-chip' + (state.activeDrops.includes(id) ? ' active' : '');
-    chip.title = drop.name;
-    chip.style.background = drop.color;
-    chip.innerHTML = `<div class="chip-check">${state.activeDrops.includes(id) ? '✓' : ''}</div>`;
+    chip.className = 'jin-color-chip';
+    chip.style.background = `radial-gradient(circle at 35% 35%, ${d.light}, ${d.color} 55%, ${d.dark})`;
+    chip.title = d.name;
+    chip.innerHTML = `<span class="chip-name">${d.name}</span>`;
     chip.addEventListener('click', () => {
-      const idx = state.activeDrops.indexOf(id);
+      const idx = G.jinSelected.indexOf(id);
       if (idx >= 0) {
-        if (state.activeDrops.length <= 2) return; // 最低2色
-        state.activeDrops.splice(idx, 1);
-        chip.classList.remove('active');
-        chip.querySelector('.chip-check').textContent = '';
+        G.jinSelected.splice(idx, 1);
+        chip.classList.remove('selected');
       } else {
-        state.activeDrops.push(id);
-        chip.classList.add('active');
-        chip.querySelector('.chip-check').textContent = '✓';
+        if (G.jinSelected.length >= n) {
+          // 最初に選んだのを外す
+          const oldest = G.jinSelected.shift();
+          list.querySelectorAll('.jin-color-chip')[JIN_COLORS.indexOf(oldest)]?.classList.remove('selected');
+        }
+        G.jinSelected.push(id);
+        chip.classList.add('selected');
       }
     });
-    palette.appendChild(chip);
+    list.appendChild(chip);
+  });
+
+  document.getElementById('jin-color-picker').classList.remove('hidden');
+}
+
+document.querySelectorAll('.jin-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const n = parseInt(btn.dataset.jin);
+    document.querySelectorAll('.jin-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    buildJinColorPicker(n);
+  });
+});
+
+document.getElementById('btn-jin-apply').addEventListener('click', () => {
+  const sel = G.jinSelected;
+  if (sel.length < G.jinN) {
+    alert(`${G.jinN}色選んでください（現在${sel.length}色）`);
+    return;
+  }
+  newGame(sel);
+  document.getElementById('jin-color-picker').classList.add('hidden');
+  document.querySelectorAll('.jin-btn').forEach(b => b.classList.remove('active'));
+  G.jinSelected = [];
+});
+
+// ========== カスタムモード ==========
+function buildPalette() {
+  const wrap = document.getElementById('palette-drops');
+  wrap.innerHTML = '';
+  ALL_DROPS.forEach(id => {
+    const d = DROP[id];
+    const chip = document.createElement('div');
+    chip.className = 'palette-drop' + (id === G.customDrop ? ' selected' : '');
+    chip.style.background = `radial-gradient(circle at 35% 35%, ${d.light}, ${d.color} 55%, ${d.dark})`;
+    chip.title = d.name;
+    chip.dataset.id = id;
+    chip.addEventListener('click', () => {
+      G.customDrop = id;
+      document.querySelectorAll('.palette-drop').forEach(c => c.classList.remove('selected'));
+      chip.classList.add('selected');
+    });
+    wrap.appendChild(chip);
   });
 }
 
-// ========== リサイズ対応 ==========
-window.addEventListener('resize', () => {
-  updateCanvasSize();
-  render();
+document.getElementById('btn-custom-toggle').addEventListener('click', () => {
+  G.customMode = !G.customMode;
+  const btn = document.getElementById('btn-custom-toggle');
+  btn.dataset.active = G.customMode ? 'true' : 'false';
+  btn.textContent = `✏ カスタムモード ${G.customMode ? 'ON' : 'OFF'}`;
+  document.getElementById('custom-palette').classList.toggle('hidden', !G.customMode);
+  if (G.customMode && G.replayMode) endReplay();
+  scheduleRender();
 });
 
-// ========== 初期化 ==========
-function init() {
-  buildColorPalette();
-  updateCanvasSize();
-  newBoard();
+buildPalette();
+
+// ========== 再生 ==========
+document.getElementById('btn-replay').addEventListener('click', startReplay);
+
+function startReplay() {
+  if (G.history.length === 0) return;
+  if (G.customMode) {
+    document.getElementById('btn-custom-toggle').click();
+  }
+
+  // 全盤面履歴と移動パスを再構築
+  const boards = [cloneBoard(G.initBoard)];
+  const paths = [{ r: G.history[0]?.from.r, c: G.history[0]?.from.c }];
+  const tempBoard = cloneBoard(G.initBoard);
+
+  for (const mv of G.history) {
+    const tmp = tempBoard[mv.to.r][mv.to.c];
+    tempBoard[mv.to.r][mv.to.c] = tempBoard[mv.from.r][mv.from.c];
+    tempBoard[mv.from.r][mv.from.c] = tmp;
+    boards.push(cloneBoard(tempBoard));
+    paths.push({ r: mv.to.r, c: mv.to.c });
+  }
+
+  G.replayBoards = boards;
+  G.replayPaths = paths;
+  G.replayMode = true;
+  G.replayStep = 0;
+  G.replayPlaying = false;
+  document.getElementById('replay-bar').classList.remove('hidden');
+  updateReplayStep();
 }
 
-init();
+function updateReplayStep() {
+  G.board = cloneBoard(G.replayBoards[G.replayStep]);
+  const max = G.replayBoards.length - 1;
+  document.getElementById('rp-step-label').textContent = `${G.replayStep}/${max}`;
+  scheduleRender();
+}
+
+function endReplay() {
+  clearInterval(G.replayInterval);
+  G.replayPlaying = false;
+  G.replayMode = false;
+  document.getElementById('replay-bar').classList.add('hidden');
+  document.getElementById('btn-rp-playpause').textContent = '▶';
+  G.board = cloneBoard(G.replayBoards[G.replayBoards.length - 1]);
+  calcCombos();
+  scheduleRender();
+}
+
+document.getElementById('btn-rp-prev').addEventListener('click', () => {
+  G.replayStep = Math.max(0, G.replayStep - 1);
+  updateReplayStep();
+});
+
+document.getElementById('btn-rp-next').addEventListener('click', () => {
+  G.replayStep = Math.min(G.replayBoards.length - 1, G.replayStep + 1);
+  updateReplayStep();
+});
+
+document.getElementById('btn-rp-playpause').addEventListener('click', () => {
+  G.replayPlaying = !G.replayPlaying;
+  document.getElementById('btn-rp-playpause').textContent = G.replayPlaying ? '⏸' : '▶';
+  if (G.replayPlaying) {
+    G.replayInterval = setInterval(() => {
+      if (G.replayStep >= G.replayBoards.length - 1) {
+        G.replayPlaying = false;
+        clearInterval(G.replayInterval);
+        document.getElementById('btn-rp-playpause').textContent = '▶';
+        return;
+      }
+      G.replayStep++;
+      updateReplayStep();
+    }, 120); // 速め
+  } else {
+    clearInterval(G.replayInterval);
+  }
+});
+
+document.getElementById('btn-rp-close').addEventListener('click', endReplay);
+
+document.getElementById('rp-trail-check').addEventListener('change', e => {
+  G.showTrail = e.target.checked;
+  scheduleRender();
+});
+
+// ========== リサイズ ==========
+window.addEventListener('resize', () => { resizeCanvas(); scheduleRender(); });
+
+// ========== 初期化 ==========
+resizeCanvas();
+newGame();
