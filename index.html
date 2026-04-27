@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>パズドラ パズル練習</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1><span class="logo-icon">⬡</span> パズドラ練習</h1>
+    <div class="header-controls">
+      <button id="btn-settings" class="btn-icon" title="設定">⚙</button>
+    </div>
+  </header>
+
+  <!-- 設定パネル -->
+  <div id="settings-panel" class="panel hidden">
+    <div class="panel-inner">
+      <h2>ボード設定</h2>
+      <div class="setting-row">
+        <label>盤面サイズ</label>
+        <div class="btn-group">
+          <button class="size-btn active" data-cols="6" data-rows="5">6×5</button>
+          <button class="size-btn" data-cols="7" data-rows="6">7×6</button>
+          <button class="size-btn" data-cols="5" data-rows="4">5×4</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <label>陣プリセット</label>
+        <div class="preset-grid">
+          <button class="preset-btn" data-preset="random">ランダム</button>
+          <button class="preset-btn" data-preset="3color">3色陣</button>
+          <button class="preset-btn" data-preset="4color">4色陣</button>
+          <button class="preset-btn" data-preset="5color">5色陣</button>
+          <button class="preset-btn" data-preset="6color">6色陣</button>
+          <button class="preset-btn" data-preset="7color">7色陣（光闇込）</button>
+          <button class="preset-btn" data-preset="healrow">回復列</button>
+          <button class="preset-btn" data-preset="firerow">火列</button>
+          <button class="preset-btn" data-preset="cross">十字陣</button>
+          <button class="preset-btn" data-preset="checker">市松模様</button>
+        </div>
+      </div>
+      <div class="setting-row">
+        <label>移動ペナルティ</label>
+        <select id="move-limit">
+          <option value="0">制限なし</option>
+          <option value="25">25手</option>
+          <option value="30">30手</option>
+          <option value="40">40手</option>
+          <option value="50">50手</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <label>ドロップ色の設定</label>
+        <div id="color-palette" class="color-palette">
+          <!-- JS で生成 -->
+        </div>
+      </div>
+      <button id="btn-apply-settings" class="btn-primary">適用</button>
+    </div>
+  </div>
+
+  <!-- メインエリア -->
+  <main>
+    <!-- ステータスバー -->
+    <div class="status-bar">
+      <div class="stat">
+        <span class="stat-label">コンボ</span>
+        <span class="stat-value" id="combo-count">0</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">手数</span>
+        <span class="stat-value" id="move-count">0</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">時間</span>
+        <span class="stat-value" id="timer">0.0</span>
+      </div>
+    </div>
+
+    <!-- パズルボード -->
+    <div id="board-wrapper">
+      <canvas id="puzzle-board"></canvas>
+      <div id="combo-popup" class="combo-popup hidden"></div>
+    </div>
+
+    <!-- コントロールボタン -->
+    <div class="controls">
+      <button id="btn-reset" class="btn-secondary">🔄 リセット</button>
+      <button id="btn-undo" class="btn-secondary">↩ 1手戻す</button>
+      <button id="btn-replay" class="btn-secondary">▶ 再生</button>
+      <button id="btn-new" class="btn-primary">✦ 新しい配置</button>
+    </div>
+
+    <!-- コンボ詳細 -->
+    <div id="combo-detail" class="combo-detail">
+      <div class="combo-detail-title">コンボ詳細</div>
+      <div id="combo-list"></div>
+    </div>
+  </main>
+
+  <!-- 再生コントロール（再生中に表示） -->
+  <div id="replay-controls" class="replay-controls hidden">
+    <button id="btn-replay-prev">◀◀</button>
+    <button id="btn-replay-play">▶</button>
+    <button id="btn-replay-next">▶▶</button>
+    <span id="replay-step">0 / 0</span>
+    <button id="btn-replay-close">✕</button>
+  </div>
+</div>
+
+<script src="game.js"></script>
+</body>
+</html>
