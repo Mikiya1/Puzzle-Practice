@@ -52,11 +52,14 @@ let CS = 72;
 
 function resizeCanvas() {
   const maxW = Math.min(document.body.clientWidth - 24, 560);
+  // セルを正方形に保つ: 幅と高さが等しくなるCSを計算
   CS = Math.floor(maxW / G.cols);
   canvas.width  = CS * G.cols;
   canvas.height = CS * G.rows;
+  // style.widthを明示指定してブラウザによる引き伸ばしを防ぐ
   canvas.style.width  = canvas.width  + 'px';
   canvas.style.height = canvas.height + 'px';
+  canvas.style.maxWidth = '100%';
 }
 
 // =========================================================

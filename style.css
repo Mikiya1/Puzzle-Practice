@@ -54,7 +54,7 @@ main{padding:12px 12px 80px;display:flex;flex-direction:column;align-items:cente
 
 /* BOARD */
 #board-wrapper{width:100%;position:relative}
-#puzzle-board{display:block;width:100%;border-radius:10px;border:2px solid var(--border);box-shadow:0 0 24px rgba(79,142,247,.12);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none}
+#puzzle-board{display:block;max-width:100%;border-radius:10px;border:2px solid var(--border);box-shadow:0 0 24px rgba(79,142,247,.12);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none}
 #puzzle-board:active{cursor:grabbing}
 
 /* CONTROLS */
