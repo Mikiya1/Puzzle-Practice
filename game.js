@@ -203,11 +203,29 @@ function sched(){ if(rafId) cancelAnimationFrame(rafId); rafId=requestAnimationF
 // =========================================================
 function cloneBoard(b){ return b.map(r=>r.slice()); }
 function rnd(drops){ return drops[Math.floor(Math.random()*drops.length)]; }
+
+// ランダム配置：3個以上揃いが出ないように1個ずつ配置
+function makeBoardNoCombo(drops){
+  const {rows, cols} = G;
+  const board = Array.from({length:rows}, ()=>Array(cols).fill(null));
+  for(let r=0;r<rows;r++){
+    for(let c=0;c<cols;c++){
+      // このセルに置けない色（左2個か上2個と同じ色はNG）
+      const forbidden = new Set();
+      if(c>=2 && board[r][c-1] && board[r][c-1]===board[r][c-2]) forbidden.add(board[r][c-1]);
+      if(r>=2 && board[r-1][c] && board[r-1][c]===board[r-2][c]) forbidden.add(board[r-1][c]);
+      const ok = drops.filter(d=>!forbidden.has(d));
+      board[r][c] = rnd(ok.length>0 ? ok : drops);
+    }
+  }
+  return board;
+}
+
 function makeBoard(drops){ return Array.from({length:G.rows},()=>Array.from({length:G.cols},()=>rnd(drops))); }
 
-function newGame(drops){
+function newGame(drops, noCombo=false){
   cancelErase(); stopTimer(); resetTimer();
-  G.board=makeBoard(drops||STANDARD);
+  G.board = noCombo ? makeBoardNoCombo(drops||STANDARD) : makeBoard(drops||STANDARD);
   G.initBoard=cloneBoard(G.board);
   G.history=[]; G.moveCount=0; G.totalCombos=[]; G.locked=false;
   G.comboLabels=[]; G.fallOffsets={};
@@ -569,7 +587,7 @@ document.getElementById('timer-display').addEventListener('click',()=>{
 // =========================================================
 // ボタン
 // =========================================================
-document.getElementById('btn-new-random').addEventListener('click',()=>newGame(STANDARD));
+document.getElementById('btn-new-random').addEventListener('click',()=>newGame(STANDARD, true));
 document.getElementById('btn-reset').addEventListener('click',resetGame);
 document.getElementById('btn-undo').addEventListener('click',()=>{
   if(!G.history.length||G.locked) return;
@@ -597,7 +615,7 @@ document.querySelectorAll('.size-btn').forEach(btn=>{
     document.querySelectorAll('.size-btn').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
     G.cols=parseInt(btn.dataset.cols); G.rows=parseInt(btn.dataset.rows);
-    resizeCanvas(); newGame();
+    resizeCanvas(); newGame(STANDARD, true);
   });
 });
 document.getElementById('time-limit-input').addEventListener('change',e=>{
@@ -788,4 +806,4 @@ document.getElementById('rp-trail-check').addEventListener('change',e=>{G.showTr
 window.addEventListener('resize',()=>{resizeCanvas();sched();});
 buildPalette();
 resizeCanvas();
-newGame();
+newGame(STANDARD, true);
