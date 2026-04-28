@@ -12,7 +12,7 @@ const STANDARD   = ['fire','water','wood','light','dark','heal'];
 const IMGS = {};
 DROP_IDS.forEach(id => {
   const img = new Image();
-  img.src = `orbs/${id}.png?v=2`;
+  img.src = `orbs/${id}.png?v=3`;
   IMGS[id] = img;
 });
 
@@ -273,9 +273,11 @@ function calcCombos(){
   else G.locked=false;
 }
 
+
 // =========================================================
 // 消去アニメ → 落ちコン
-// 下の行から順にフェードアウト→消去→上から落ちてくる
+// 本家風: 全セルを同時にゆっくりフェードアウト
+//         消えた後、重力で落下、連鎖コンボ計算
 // =========================================================
 function cancelErase(){
   if(G.eraseAnimId){cancelAnimationFrame(G.eraseAnimId);G.eraseAnimId=null;}
@@ -285,66 +287,44 @@ function cancelErase(){
 function startErase(combos){
   cancelErase();
 
-  // 行ごとに消去セルを収集
-  const rowMap={};
+  // 全消去セルを登録
   combos.forEach(combo=>{
     combo.cells.forEach(({r,c})=>{
-      if(!rowMap[r]) rowMap[r]=[];
-      rowMap[r].push({r,c,drop:combo.type});
-    });
-  });
-
-  // 下の行から順（行番号大きい=下）
-  const sortedRows=Object.keys(rowMap).map(Number).sort((a,b)=>b-a);
-
-  const DELAY=100;  // 行ごとの遅延ms
-  const FADE=250;   // フェード時間ms
-
-  // eraseAlpha初期化
-  sortedRows.forEach(row=>{
-    rowMap[row].forEach(({r,c,drop})=>{
       const key=`${r},${c}`;
       G.eraseAlpha[key]=1.0;
-      G.eraseDrop[key]=drop;
+      G.eraseDrop[key]=combo.type;
     });
   });
 
-  G.eraseRows=sortedRows.map((row,idx)=>({
-    row, cells:rowMap[row], delay:idx*DELAY, FADE,
-    phase:'wait', startMs:0
-  }));
+  // コンボ数をすぐ表示
+  G.combos=combos;
+  updateComboUI();
 
-  const globalStart=performance.now();
+  const FADE=380;
+  const start=performance.now();
 
   function loop(now){
-    let anyAlive=false;
-    G.eraseRows.forEach(grp=>{
-      if(grp.phase==='done') return;
-      const elapsed=now-globalStart;
-      if(grp.phase==='wait'&&elapsed>=grp.delay){grp.phase='fade';grp.startMs=now;}
-      if(grp.phase==='fade'){
-        const t=Math.min((now-grp.startMs)/grp.FADE,1.0);
-        grp.cells.forEach(({r,c})=>{ G.eraseAlpha[`${r},${c}`]=1-t; });
-        if(t>=1.0){
-          grp.cells.forEach(({r,c})=>{
-            G.board[r][c]=null;
-            delete G.eraseAlpha[`${r},${c}`];
-            delete G.eraseDrop[`${r},${c}`];
-          });
-          grp.phase='done';
-        } else anyAlive=true;
-      } else if(grp.phase==='wait') anyAlive=true;
-    });
+    const t=Math.min((now-start)/FADE, 1.0);
+    const alpha=1.0-t;
+    for(const key in G.eraseAlpha){
+      G.eraseAlpha[key]=alpha;
+    }
     sched();
-    if(anyAlive){ G.eraseAnimId=requestAnimationFrame(loop); }
-    else{
-      // 全消去完了 → 落ちコン処理
+    if(t<1.0){
+      G.eraseAnimId=requestAnimationFrame(loop);
+    } else {
+      // フェード完了 → boardをnullに
+      for(const key in G.eraseAlpha){
+        const [r,c]=key.split(',').map(Number);
+        G.board[r][c]=null;
+      }
+      G.eraseAlpha={}; G.eraseDrop={};
       G.eraseAnimId=null;
       applyGravity(()=>{
-        // 落ちコン後に再度コンボ計算（連鎖）
         const newCombos=findCombos();
         if(newCombos.length>0){
-          G.combos=newCombos; updateComboUI();
+          G.combos=[...G.combos,...newCombos];
+          updateComboUI();
           startErase(newCombos);
         } else {
           G.locked=false; sched();
@@ -355,10 +335,9 @@ function startErase(combos){
   G.eraseAnimId=requestAnimationFrame(loop);
 }
 
-// 重力：nullのセルに上のドロップを落とす（アニメ付き）
+// 重力
 function applyGravity(callback){
   const{rows,cols,board}=G;
-  // 列ごとに下から詰める
   for(let c=0;c<cols;c++){
     let writeRow=rows-1;
     for(let r=rows-1;r>=0;r--){
@@ -368,13 +347,12 @@ function applyGravity(callback){
         writeRow--;
       }
     }
-    // 残りをnull
     for(let r=writeRow;r>=0;r--) board[r][c]=null;
   }
   sched();
-  // 少し待ってからcallback（落ちる視覚効果の時間）
-  setTimeout(callback, 180);
+  setTimeout(callback, 200);
 }
+
 
 // コンボ計算（結果だけ返す、G.combosは変えない）
 function findCombos(){
@@ -520,7 +498,7 @@ function buildJinPicker(n){
     chip.className='jin-color-chip'; chip.title=DROP_NAMES[id];
     chip.style.overflow='hidden';
     const img=document.createElement('img');
-    img.src=`orbs/${id}.png?v=2`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
+    img.src=`orbs/${id}.png?v=3`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
     chip.appendChild(img);
     const lbl=document.createElement('span'); lbl.className='chip-name'; lbl.textContent=DROP_NAMES[id];
     chip.appendChild(lbl);
@@ -566,7 +544,7 @@ function buildPalette(){
     chip.dataset.id=id;
     chip.style.cssText='width:44px;height:44px;border-radius:50%;overflow:hidden;cursor:pointer;border:3px solid transparent;transition:all .15s;flex-shrink:0';
     const img=document.createElement('img');
-    img.src=`orbs/${id}.png?v=2`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
+    img.src=`orbs/${id}.png?v=3`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
     chip.appendChild(img);
     chip.addEventListener('click',()=>{
       G.customDrop=id;
