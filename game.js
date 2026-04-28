@@ -11,7 +11,7 @@ const STANDARD   = ['fire','water','wood','light','dark','heal'];
 const IMGS = {};
 DROP_IDS.forEach(id => {
   const img = new Image();
-  img.src = `orbs/${id}.png?v=5`;
+  img.src = `orbs/orb_${id}.png`;
   IMGS[id] = img;
 });
 
@@ -92,7 +92,8 @@ function render() {
     ctx.setLineDash([]);
   }
 
-  if(G.replayMode && G.showTrail && G.replayStep>0) renderTrail();
+  // 再生中、または再生終了後で軌跡保持中の時は表示
+  if((G.replayMode || G.keepTrail) && G.showTrail && G.replayPaths && G.replayPaths.length > 1) renderTrail();
 
   // ドロップ描画（落下オフセット考慮）
   for(let r=0;r<G.rows;r++){
@@ -171,7 +172,9 @@ function renderComboLabels(){
 }
 
 function renderTrail(){
-  const path = G.replayPaths.slice(0, G.replayStep+1);
+  // keepTrail（終了後保持）の場合は全部、再生中は現在位置まで
+  const endIdx = G.keepTrail ? G.replayPaths.length : (G.replayStep+1);
+  const path = G.replayPaths.slice(0, endIdx);
   if(path.length<2) return;
   ctx.save();
   ctx.strokeStyle='rgba(255,220,40,.85)'; ctx.lineWidth=CS*.1;
@@ -180,8 +183,16 @@ function renderTrail(){
   ctx.beginPath(); ctx.moveTo(path[0].c*CS+CS/2, path[0].r*CS+CS/2);
   for(let i=1;i<path.length;i++) ctx.lineTo(path[i].c*CS+CS/2, path[i].r*CS+CS/2);
   ctx.stroke();
-  ctx.shadowBlur=0; ctx.fillStyle='rgba(255,255,255,.9)';
-  ctx.beginPath(); ctx.arc(path[0].c*CS+CS/2, path[0].r*CS+CS/2, CS*.1, 0, Math.PI*2); ctx.fill();
+  ctx.shadowBlur=0;
+  // 始点（緑）
+  ctx.fillStyle='rgba(60,255,120,.95)';
+  ctx.beginPath(); ctx.arc(path[0].c*CS+CS/2, path[0].r*CS+CS/2, CS*.13, 0, Math.PI*2); ctx.fill();
+  // 終点（赤）
+  if(path.length>1){
+    const last = path[path.length-1];
+    ctx.fillStyle='rgba(255,80,80,.95)';
+    ctx.beginPath(); ctx.arc(last.c*CS+CS/2, last.r*CS+CS/2, CS*.13, 0, Math.PI*2); ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -200,6 +211,7 @@ function newGame(drops){
   G.initBoard=cloneBoard(G.board);
   G.history=[]; G.moveCount=0; G.totalCombos=[]; G.locked=false;
   G.comboLabels=[]; G.fallOffsets={};
+  G.keepTrail=false; G.replayPaths=[];
   updateMoveUI(); updateComboUI(); sched();
 }
 function resetGame(){
@@ -207,6 +219,7 @@ function resetGame(){
   G.board=cloneBoard(G.initBoard);
   G.history=[]; G.moveCount=0; G.totalCombos=[]; G.locked=false;
   G.comboLabels=[]; G.fallOffsets={};
+  G.keepTrail=false; G.replayPaths=[];
   updateMoveUI(); updateComboUI(); sched();
 }
 
@@ -244,6 +257,7 @@ function onStart(e){
   if(G.locked) return;
   cancelErase();
   G.comboLabels=[]; // 前のコンボラベルを消す
+  G.keepTrail=false; // 軌跡もクリア
   G.dragging=true; G.dragCell={...cell};
   G.heldDrop=G.board[cell.r][cell.c];
   // 元位置にドロップを残す（半透明で表示するため）
@@ -611,7 +625,7 @@ function buildJinPicker(n){
     const chip=document.createElement('div');
     chip.className='jin-color-chip'; chip.title=DROP_NAMES[id]; chip.style.overflow='hidden';
     const img=document.createElement('img');
-    img.src=`orbs/${id}.png?v=5`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
+    img.src=`orbs/orb_${id}.png`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
     chip.appendChild(img);
     const lbl=document.createElement('span'); lbl.className='chip-name'; lbl.textContent=DROP_NAMES[id];
     chip.appendChild(lbl);
@@ -657,7 +671,7 @@ function buildPalette(){
     chip.dataset.id=id;
     chip.style.cssText='width:44px;height:44px;border-radius:50%;overflow:hidden;cursor:pointer;border:3px solid transparent;transition:all .15s;flex-shrink:0';
     const img=document.createElement('img');
-    img.src=`orbs/${id}.png?v=5`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
+    img.src=`orbs/orb_${id}.png`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
     chip.appendChild(img);
     chip.addEventListener('click',()=>{
       G.customDrop=id;
@@ -715,6 +729,7 @@ function endReplay(){
     G.board=cloneBoard(G.replaySteps[G.replaySteps.length-1]);
   }
   G.totalCombos=[]; G.comboLabels=[]; G.locked=false;
+  G.keepTrail=true;  // 軌跡を画面に残す
   // 最終盤面でコンボ判定して消去再生
   runComboChain();
   sched();
@@ -765,6 +780,7 @@ document.getElementById('btn-rp-close').addEventListener('click',()=>{
     G.board=cloneBoard(G.replaySteps[G.replaySteps.length-1]);
   }
   G.totalCombos=[]; G.comboLabels=[]; G.locked=false;
+  G.keepTrail=true;  // 軌跡を保持
   sched();
 });
 document.getElementById('rp-trail-check').addEventListener('change',e=>{G.showTrail=e.target.checked;sched();});
