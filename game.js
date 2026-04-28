@@ -12,7 +12,7 @@ const STANDARD   = ['fire','water','wood','light','dark','heal'];
 const IMGS = {};
 DROP_IDS.forEach(id => {
   const img = new Image();
-  img.src = `orbs/${id}.png`;
+  img.src = `orbs/${id}.png?v=2`;
   IMGS[id] = img;
 });
 
@@ -112,10 +112,11 @@ function render() {
 
 function drawOrb(x, y, id, alpha, scale, lifted) {
   const img = IMGS[id];
-  const cx = x+CS/2, cy = y+CS/2, s = CS*scale;
+  const cx = x+CS/2, cy = y+CS/2;
+  const s = CS * 0.84 * scale;  // セルの84%サイズ
   ctx.save();
   ctx.globalAlpha = alpha ?? 1;
-  if(lifted){ ctx.shadowColor = DROP_COLORS[id]||'#fff'; ctx.shadowBlur = CS*0.4; }
+  if(lifted){ ctx.shadowColor = DROP_COLORS[id]||'#fff'; ctx.shadowBlur = CS*0.35; }
   if(img && img.complete && img.naturalWidth > 0) {
     ctx.drawImage(img, cx-s/2, cy-s/2, s, s);
   } else {
@@ -519,7 +520,7 @@ function buildJinPicker(n){
     chip.className='jin-color-chip'; chip.title=DROP_NAMES[id];
     chip.style.overflow='hidden';
     const img=document.createElement('img');
-    img.src=`orbs/${id}.png`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
+    img.src=`orbs/${id}.png?v=2`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
     chip.appendChild(img);
     const lbl=document.createElement('span'); lbl.className='chip-name'; lbl.textContent=DROP_NAMES[id];
     chip.appendChild(lbl);
@@ -565,7 +566,7 @@ function buildPalette(){
     chip.dataset.id=id;
     chip.style.cssText='width:44px;height:44px;border-radius:50%;overflow:hidden;cursor:pointer;border:3px solid transparent;transition:all .15s;flex-shrink:0';
     const img=document.createElement('img');
-    img.src=`orbs/${id}.png`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
+    img.src=`orbs/${id}.png?v=2`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
     chip.appendChild(img);
     chip.addEventListener('click',()=>{
       G.customDrop=id;

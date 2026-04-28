@@ -1,9 +1,11 @@
 {
   "version": 2,
-  "builds": [
+  "headers": [
     {
-      "src": "**/*",
-      "use": "@vercel/static"
+      "source": "/orbs/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
     }
   ]
 }
