@@ -11,7 +11,7 @@ const STANDARD   = ['fire','water','wood','light','dark','heal'];
 const IMGS = {};
 DROP_IDS.forEach(id => {
   const img = new Image();
-  img.src = `orbs/orb_${id}.png`;
+  img.src = `orbs/orb_${id}.png?t=1777354182`;
   IMGS[id] = img;
 });
 
