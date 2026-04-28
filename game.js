@@ -11,7 +11,7 @@ const STANDARD   = ['fire','water','wood','light','dark','heal'];
 const IMGS = {};
 DROP_IDS.forEach(id => {
   const img = new Image();
-  img.src = `orbs/${id}.png?v=4`;
+  img.src = `orbs/${id}.png?v=5`;
   IMGS[id] = img;
 });
 
@@ -28,18 +28,21 @@ let G = {
   moveCount:0,
   timeLimit:0,
   timerRunning:false, timerStart:0, timerElapsed:0, timerTick:null,
-  // コンボ: 1手で消えた全コンボを累積
-  totalCombos:[],   // 累積コンボ一覧（表示用）
+  totalCombos:[],   // 累積コンボ
+  // 消去アニメ
   eraseAnimId:null,
-  eraseAlpha:{},    // "r,c" -> 0〜1
-  eraseDrop:{},     // "r,c" -> drop id
+  eraseAlpha:{},      // "r,c" -> 0〜1（消去中の不透明度）
+  eraseDrop:{},       // "r,c" -> drop id
+  // コンボラベル：消えた場所に「Combo X」を表示
+  comboLabels:[],     // [{r, c, n, alpha, time}]
+  // 落下アニメ
+  fallOffsets:{},     // "r,c" -> y方向のオフセット（負の値=上から落ちてくる）
+  fallAnimId:null,
   // 再生
   replayMode:false,
-  // replayStepsは各ステップの盤面+コンボ消去情報を持つ
-  replaySteps:[],   // [{board, combos:[{type,cells}], afterBoard}]
+  replaySteps:[],
   replayStep:0,
   replayPlaying:false, replayIntervalId:null,
-  replaySubStep:'move', // 'move'|'erase'
   showTrail:true,
   replayPaths:[],
   customDrop:'fire', customPainting:false,
@@ -70,11 +73,14 @@ let dragPixel = null, rafId = null;
 
 function render() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // 背景
   const bg = ctx.createLinearGradient(0,0,canvas.width,canvas.height);
   bg.addColorStop(0,'#0c1424'); bg.addColorStop(1,'#101c34');
   ctx.fillStyle = bg;
   ctx.beginPath(); ctx.roundRect(0,0,canvas.width,canvas.height,10); ctx.fill();
 
+  // グリッド
   ctx.strokeStyle='rgba(255,255,255,0.07)'; ctx.lineWidth=1;
   for(let r=0;r<=G.rows;r++){ctx.beginPath();ctx.moveTo(0,r*CS);ctx.lineTo(canvas.width,r*CS);ctx.stroke();}
   for(let c=0;c<=G.cols;c++){ctx.beginPath();ctx.moveTo(c*CS,0);ctx.lineTo(c*CS,canvas.height);ctx.stroke();}
@@ -88,22 +94,37 @@ function render() {
 
   if(G.replayMode && G.showTrail && G.replayStep>0) renderTrail();
 
+  // ドロップ描画（落下オフセット考慮）
   for(let r=0;r<G.rows;r++){
     for(let c=0;c<G.cols;c++){
-      if(G.dragging && G.dragCell && G.dragCell.r===r && G.dragCell.c===c) continue;
+      // ドラッグ中のセルは描画しない（半透明ゴーストとして元位置に薄く）
+      const isDragSrc = G.dragging && G.dragCell && G.dragCell.r===r && G.dragCell.c===c;
       const key=`${r},${c}`;
+      const offsetY = G.fallOffsets[key] || 0;
+
       if(key in G.eraseAlpha){
+        // 消去アニメ中
         const a=G.eraseAlpha[key];
-        if(a>0.01) drawOrb(c*CS, r*CS, G.eraseDrop[key], a, 1-(1-a)*0.25, false);
-      } else {
+        if(a>0.01) drawOrb(c*CS, r*CS+offsetY, G.eraseDrop[key], a, 1, false);
+      } else if(!isDragSrc) {
         const drop=G.board[r][c];
-        if(drop) drawOrb(c*CS, r*CS, drop, 1, 1, false);
+        if(drop) drawOrb(c*CS, r*CS+offsetY, drop, 1, 1, false);
       }
     }
   }
 
-  if(G.dragging && dragPixel && G.heldDrop)
-    drawOrb(dragPixel.x-CS/2, dragPixel.y-CS/2, G.heldDrop, 1, 1.2, true);
+  // ドラッグ元位置に薄いゴーストドロップ
+  if(G.dragging && G.dragCell && G.heldDrop){
+    drawOrb(G.dragCell.c*CS, G.dragCell.r*CS, G.heldDrop, 0.35, 1, false);
+  }
+
+  // ドラッグ中のドロップ（指の位置・大きめ・グロー）
+  if(G.dragging && dragPixel && G.heldDrop){
+    drawOrb(dragPixel.x-CS/2, dragPixel.y-CS/2, G.heldDrop, 1, 1.15, true);
+  }
+
+  // コンボラベル「Combo X」を上に重ねて描画
+  renderComboLabels();
 }
 
 function drawOrb(x, y, id, alpha, scale, lifted) {
@@ -112,7 +133,7 @@ function drawOrb(x, y, id, alpha, scale, lifted) {
   const s = CS * 0.88 * scale;
   ctx.save();
   ctx.globalAlpha = alpha ?? 1;
-  if(lifted){ ctx.shadowColor=DROP_COLORS[id]||'#fff'; ctx.shadowBlur=CS*0.35; }
+  if(lifted){ ctx.shadowColor=DROP_COLORS[id]||'#fff'; ctx.shadowBlur=CS*0.4; }
   if(img && img.complete && img.naturalWidth>0){
     ctx.drawImage(img, cx-s/2, cy-s/2, s, s);
   } else {
@@ -121,6 +142,32 @@ function drawOrb(x, y, id, alpha, scale, lifted) {
     ctx.beginPath(); ctx.arc(cx,cy,s*.44,0,Math.PI*2); ctx.fillStyle=g; ctx.fill();
   }
   ctx.shadowBlur=0; ctx.restore();
+}
+
+// 「Combo X」ピンク文字（本家風）
+function renderComboLabels(){
+  G.comboLabels.forEach(label=>{
+    if(label.alpha<=0) return;
+    const cx = label.c*CS + CS/2;
+    const cy = label.r*CS + CS/2;
+    ctx.save();
+    ctx.globalAlpha = label.alpha;
+    const fontSize = Math.round(CS*0.32);
+    ctx.font = `bold ${fontSize}px 'Orbitron', 'Noto Sans JP', sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // 縁取り（黒）
+    ctx.lineWidth = fontSize * 0.18;
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.strokeText(`Combo ${label.n}`, cx, cy);
+    // 本体（ピンク〜マゼンタ）
+    const grad = ctx.createLinearGradient(cx, cy-fontSize/2, cx, cy+fontSize/2);
+    grad.addColorStop(0, '#ff66cc');
+    grad.addColorStop(1, '#ff1188');
+    ctx.fillStyle = grad;
+    ctx.fillText(`Combo ${label.n}`, cx, cy);
+    ctx.restore();
+  });
 }
 
 function renderTrail(){
@@ -152,12 +199,14 @@ function newGame(drops){
   G.board=makeBoard(drops||STANDARD);
   G.initBoard=cloneBoard(G.board);
   G.history=[]; G.moveCount=0; G.totalCombos=[]; G.locked=false;
+  G.comboLabels=[]; G.fallOffsets={};
   updateMoveUI(); updateComboUI(); sched();
 }
 function resetGame(){
   cancelErase(); stopTimer(); resetTimer();
   G.board=cloneBoard(G.initBoard);
   G.history=[]; G.moveCount=0; G.totalCombos=[]; G.locked=false;
+  G.comboLabels=[]; G.fallOffsets={};
   updateMoveUI(); updateComboUI(); sched();
 }
 
@@ -194,8 +243,10 @@ function onStart(e){
   }
   if(G.locked) return;
   cancelErase();
+  G.comboLabels=[]; // 前のコンボラベルを消す
   G.dragging=true; G.dragCell={...cell};
-  G.heldDrop=G.board[cell.r][cell.c]; G.board[cell.r][cell.c]=null;
+  G.heldDrop=G.board[cell.r][cell.c];
+  // 元位置にドロップを残す（半透明で表示するため）
   dragPixel={x:pos.x,y:pos.y};
   if(!G.timerRunning) startTimer();
   sched();
@@ -211,23 +262,25 @@ function onMove(e){
   dragPixel={x:pos.x,y:pos.y};
   const cell=toCell(pos.x,pos.y);
   if(cell&&(cell.r!==G.dragCell.r||cell.c!==G.dragCell.c)){
-    const swapped=G.board[cell.r][cell.c];
-    G.board[G.dragCell.r][G.dragCell.c]=swapped;
-    G.board[cell.r][cell.c]=null;
-    G.history.push({from:{...G.dragCell},to:{...cell},swapped});
-    G.dragCell={...cell}; G.moveCount++; updateMoveUI();
+    // 隣のドロップを元位置に押し出す
+    const targetDrop = G.board[cell.r][cell.c];
+    G.board[G.dragCell.r][G.dragCell.c] = targetDrop;
+    G.board[cell.r][cell.c] = G.heldDrop;  // 移動先には常にheldDropを置く
+    G.history.push({from:{...G.dragCell},to:{...cell},swapped:targetDrop});
+    G.dragCell={...cell};
+    G.moveCount++; updateMoveUI();
   }
   sched();
 }
 function onEnd(e){
-  if(G.customPainting){G.customPainting=false; runComboChain(false); return;}
+  if(G.customPainting){G.customPainting=false; runComboChain(); return;}
   if(!G.dragging) return;
   G.dragging=false;
-  if(G.dragCell) G.board[G.dragCell.r][G.dragCell.c]=G.heldDrop;
+  // heldDropは既にG.dragCellの位置に設定済み（onMoveで処理）
   G.heldDrop=null; G.dragCell=null; dragPixel=null;
   stopTimer(); G.locked=true;
-  G.totalCombos=[];  // 新しい手なのでコンボをリセット
-  runComboChain(false);
+  G.totalCombos=[]; G.comboLabels=[];
+  runComboChain();
   sched();
 }
 
@@ -265,81 +318,188 @@ function detectCombos(board){
     }
     combos.push({type,cells});
   }
+  // コンボの順序：下にあるものから先（行が大きい順）
+  combos.sort((a,b)=>{
+    const aMaxR = Math.max(...a.cells.map(c=>c.r));
+    const bMaxR = Math.max(...b.cells.map(c=>c.r));
+    return bMaxR - aMaxR;
+  });
   return combos;
 }
 
-// コンボチェーン: 消去→落下→再検出を繰り返す
-function runComboChain(isReplay){
+// コンボ連鎖：1コンボずつ順番に消し、全部消えたら落下、再判定
+function runComboChain(){
   const combos = detectCombos(G.board);
   if(combos.length===0){
-    G.locked=false; sched(); return;
+    G.locked=false;
+    sched();
+    // 1.5秒後にコンボラベル消去
+    setTimeout(()=>{ fadeComboLabels(); }, 1200);
+    return;
   }
-  // 今回の手で消えるコンボを累積
+
   G.totalCombos = [...G.totalCombos, ...combos];
   updateComboUI();
-  startEraseAnim(combos, ()=>{
-    applyGravity(()=>{
-      runComboChain(isReplay);
+
+  // 1コンボずつ順番に消去
+  eraseCombosOneByOne(combos, 0, ()=>{
+    // 全コンボ消去完了 → 落下
+    animateFall(()=>{
+      runComboChain();
     });
   });
 }
 
-// =========================================================
-// 消去アニメ（全セル同時フェード）
-// =========================================================
-function cancelErase(){
-  if(G.eraseAnimId){cancelAnimationFrame(G.eraseAnimId);G.eraseAnimId=null;}
-  G.eraseAlpha={}; G.eraseDrop={};
-}
+// コンボを1個ずつ順番に消す（本家風）
+function eraseCombosOneByOne(combos, idx, onDone){
+  if(idx >= combos.length){ onDone(); return; }
+  const combo = combos[idx];
+  const comboNum = G.totalCombos.indexOf(combo) + 1;
 
-function startEraseAnim(combos, onDone){
-  cancelErase();
-  combos.forEach(combo=>{
-    combo.cells.forEach(({r,c})=>{
-      const key=`${r},${c}`;
-      G.eraseAlpha[key]=1.0;
-      G.eraseDrop[key]=combo.type;
-    });
+  // コンボラベルを表示（中央セル）
+  const cells = combo.cells;
+  const avgR = cells.reduce((s,c)=>s+c.r,0)/cells.length;
+  const avgC = cells.reduce((s,c)=>s+c.c,0)/cells.length;
+  const labelR = Math.round(avgR);
+  const labelC = Math.round(avgC);
+  G.comboLabels.push({r:labelR, c:labelC, n:comboNum, alpha:1.0});
+
+  // セルを消去アニメに登録
+  cells.forEach(({r,c})=>{
+    G.eraseAlpha[`${r},${c}`] = 1.0;
+    G.eraseDrop[`${r},${c}`] = combo.type;
   });
 
-  const FADE=350;
-  const start=performance.now();
-  function loop(now){
-    const t=Math.min((now-start)/FADE,1.0);
-    for(const key in G.eraseAlpha) G.eraseAlpha[key]=1.0-t;
+  const FADE = 220;  // 1コンボの消去時間
+  const DELAY_BETWEEN = 120;  // 次のコンボまでの間隔
+  const start = performance.now();
+
+  function animFade(now){
+    const t = Math.min((now-start)/FADE, 1.0);
+    cells.forEach(({r,c})=>{ G.eraseAlpha[`${r},${c}`] = 1.0-t; });
     sched();
     if(t<1.0){
-      G.eraseAnimId=requestAnimationFrame(loop);
+      G.eraseAnimId = requestAnimationFrame(animFade);
     } else {
-      for(const key in G.eraseAlpha){
-        const[r,c]=key.split(',').map(Number);
-        G.board[r][c]=null;
-      }
-      G.eraseAlpha={}; G.eraseDrop={};
-      G.eraseAnimId=null;
+      // このコンボのセルをboardから削除
+      cells.forEach(({r,c})=>{
+        G.board[r][c] = null;
+        delete G.eraseAlpha[`${r},${c}`];
+        delete G.eraseDrop[`${r},${c}`];
+      });
       sched();
-      if(onDone) onDone();
+      // 次のコンボへ
+      setTimeout(()=>eraseCombosOneByOne(combos, idx+1, onDone), DELAY_BETWEEN);
     }
   }
-  G.eraseAnimId=requestAnimationFrame(loop);
+  G.eraseAnimId = requestAnimationFrame(animFade);
 }
 
-// 重力
-function applyGravity(callback){
+// 落下アニメ：nullセルの上のドロップが落ちてくる
+function animateFall(onDone){
   const{rows,cols,board}=G;
+
+  // 各列について、新しい配置を計算
+  const moves = []; // [{from:{r,c}, to:{r,c}, drop}]
   for(let c=0;c<cols;c++){
-    let writeRow=rows-1;
+    let writeRow = rows-1;
     for(let r=rows-1;r>=0;r--){
       if(board[r][c]!==null){
-        board[writeRow][c]=board[r][c];
-        if(writeRow!==r) board[r][c]=null;
+        if(writeRow!==r){
+          moves.push({fromR:r, toR:writeRow, c, drop:board[r][c]});
+        }
         writeRow--;
       }
     }
-    for(let r=writeRow;r>=0;r--) board[r][c]=null;
   }
-  sched();
-  setTimeout(callback, 180);
+
+  if(moves.length===0){ onDone(); return; }
+
+  // boardを最終状態に更新しつつ、fallOffsetsで視覚的に上から落とす
+  const newBoard = Array.from({length:rows}, ()=>Array(cols).fill(null));
+  for(let c=0;c<cols;c++){
+    let writeRow = rows-1;
+    for(let r=rows-1;r>=0;r--){
+      if(board[r][c]!==null){
+        newBoard[writeRow][c] = board[r][c];
+        writeRow--;
+      }
+    }
+  }
+
+  // moves: 元の位置 -> 新しい位置 への変換
+  // fallOffsets: 新しい位置から見て、現在は何ピクセル上にいるか
+  G.fallOffsets = {};
+  moves.forEach(m=>{
+    const dy = (m.fromR - m.toR) * CS;  // 落下する距離
+    const key = `${m.toR},${m.c}`;
+    G.fallOffsets[key] = -dy; // 負の値=現在は上方向にいる
+  });
+
+  G.board = newBoard;
+
+  const FALL_DURATION = 250;
+  const start = performance.now();
+
+  function animFall(now){
+    const t = Math.min((now-start)/FALL_DURATION, 1.0);
+    // ease-in（重力風加速）
+    const eased = t*t;
+
+    let active = false;
+    Object.keys(G.fallOffsets).forEach(key=>{
+      const orig = G.fallOffsets[key];
+      // origは負の値、徐々に0に近づく
+      const current = orig * (1 - eased);
+      if(Math.abs(current) > 0.5){
+        G.fallOffsets[key] = orig; // 保持（後でcurrentで書き換える）
+        active = true;
+      }
+    });
+
+    // 描画用に現在のオフセットを計算したものを別マップで持つ
+    const renderOffsets = {};
+    Object.keys(G.fallOffsets).forEach(key=>{
+      const orig = G.fallOffsets[key];
+      renderOffsets[key] = orig * (1 - eased);
+    });
+    // 一時的にfallOffsetsを描画用に置き換え
+    const tmp = G.fallOffsets;
+    G.fallOffsets = renderOffsets;
+    sched();
+    G.fallOffsets = tmp;
+
+    if(t<1.0){
+      G.fallAnimId = requestAnimationFrame(animFall);
+    } else {
+      G.fallOffsets = {};
+      G.fallAnimId = null;
+      sched();
+      setTimeout(onDone, 100);
+    }
+  }
+  G.fallAnimId = requestAnimationFrame(animFall);
+}
+
+function cancelErase(){
+  if(G.eraseAnimId){cancelAnimationFrame(G.eraseAnimId);G.eraseAnimId=null;}
+  if(G.fallAnimId){cancelAnimationFrame(G.fallAnimId);G.fallAnimId=null;}
+  G.eraseAlpha={}; G.eraseDrop={}; G.fallOffsets={};
+}
+
+// コンボラベルをフェードアウト
+function fadeComboLabels(){
+  if(G.comboLabels.length===0) return;
+  const FADE=600;
+  const start=performance.now();
+  function loop(now){
+    const t=Math.min((now-start)/FADE,1.0);
+    G.comboLabels.forEach(l=>{ l.alpha = 1.0-t; });
+    sched();
+    if(t<1.0) requestAnimationFrame(loop);
+    else { G.comboLabels=[]; sched(); }
+  }
+  requestAnimationFrame(loop);
 }
 
 // =========================================================
@@ -347,7 +507,6 @@ function applyGravity(callback){
 // =========================================================
 function updateMoveUI(){ document.getElementById('move-count').textContent=G.moveCount; }
 function updateComboUI(){
-  // コンボ数はtotalCombosの長さ
   document.getElementById('combo-count').textContent=G.totalCombos.length;
   const list=document.getElementById('combo-list'); list.innerHTML='';
   G.totalCombos.forEach(combo=>{
@@ -405,7 +564,7 @@ document.getElementById('btn-undo').addEventListener('click',()=>{
   G.board[last.from.r][last.from.c]=G.board[last.to.r][last.to.c];
   G.board[last.to.r][last.to.c]=last.swapped;
   G.moveCount=Math.max(0,G.moveCount-1);
-  G.totalCombos=[];
+  G.totalCombos=[]; G.comboLabels=[];
   updateMoveUI(); updateComboUI(); sched();
 });
 
@@ -452,7 +611,7 @@ function buildJinPicker(n){
     const chip=document.createElement('div');
     chip.className='jin-color-chip'; chip.title=DROP_NAMES[id]; chip.style.overflow='hidden';
     const img=document.createElement('img');
-    img.src=`orbs/${id}.png?v=4`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
+    img.src=`orbs/${id}.png?v=5`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
     chip.appendChild(img);
     const lbl=document.createElement('span'); lbl.className='chip-name'; lbl.textContent=DROP_NAMES[id];
     chip.appendChild(lbl);
@@ -498,7 +657,7 @@ function buildPalette(){
     chip.dataset.id=id;
     chip.style.cssText='width:44px;height:44px;border-radius:50%;overflow:hidden;cursor:pointer;border:3px solid transparent;transition:all .15s;flex-shrink:0';
     const img=document.createElement('img');
-    img.src=`orbs/${id}.png?v=4`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
+    img.src=`orbs/${id}.png?v=5`; img.style.cssText='width:100%;height:100%;object-fit:cover;display:block';
     chip.appendChild(img);
     chip.addEventListener('click',()=>{
       G.customDrop=id;
@@ -514,122 +673,37 @@ function buildPalette(){
 
 // =========================================================
 // 再生
-// 手順ごとに盤面+コンボ消去+落ちコンを完全再現
 // =========================================================
 document.getElementById('btn-replay').addEventListener('click',startReplay);
-
-function buildReplaySteps(){
-  // 各ステップ: 移動後の盤面、その盤面でのコンボ連鎖を全て記録
-  const steps=[];
-  const tmp=cloneBoard(G.initBoard);
-
-  for(const mv of G.history){
-    const before=cloneBoard(tmp);
-    const t=tmp[mv.to.r][mv.to.c];
-    tmp[mv.to.r][mv.to.c]=tmp[mv.from.r][mv.from.c];
-    tmp[mv.from.r][mv.from.c]=t;
-    const after=cloneBoard(tmp);
-
-    // この移動後の連鎖を全て計算
-    const chains=[]; // [{combos, afterBoard}]
-    const sim=cloneBoard(tmp);
-    let chainCombos=detectCombos(sim);
-    while(chainCombos.length>0){
-      const boardBefore=cloneBoard(sim);
-      chainCombos.forEach(combo=>{
-        combo.cells.forEach(({r,c})=>{ sim[r][c]=null; });
-      });
-      // 重力
-      for(let c=0;c<G.cols;c++){
-        let wr=G.rows-1;
-        for(let r=G.rows-1;r>=0;r--){
-          if(sim[r][c]!==null){sim[wr][c]=sim[r][c];if(wr!==r)sim[r][c]=null;wr--;}
-        }
-        for(let r=wr;r>=0;r--) sim[r][c]=null;
-      }
-      chains.push({combos:chainCombos, boardAfter:cloneBoard(sim)});
-      chainCombos=detectCombos(sim);
-    }
-
-    steps.push({
-      from:mv.from, to:mv.to,
-      boardBefore:before,
-      boardAfter:after,
-      chains,
-      finalBoard:cloneBoard(sim),
-    });
-  }
-  return steps;
-}
 
 function startReplay(){
   if(!G.history.length||G.mode==='edit') return;
   cancelErase();
-  const steps=buildReplaySteps();
 
-  // 再生用パス（移動軌跡）
+  // 各手順の盤面スナップショット
+  const boards=[cloneBoard(G.initBoard)];
+  const tmp=cloneBoard(G.initBoard);
+  for(const mv of G.history){
+    const t=tmp[mv.to.r][mv.to.c];
+    tmp[mv.to.r][mv.to.c]=tmp[mv.from.r][mv.from.c];
+    tmp[mv.from.r][mv.from.c]=t;
+    boards.push(cloneBoard(tmp));
+  }
+
   const paths=[{r:G.history[0].from.r,c:G.history[0].from.c}];
   G.history.forEach(mv=>paths.push({r:mv.to.r,c:mv.to.c}));
 
-  G.replaySteps=steps;
+  G.replaySteps=boards;
   G.replayPaths=paths;
   G.replayMode=true;
   G.replayStep=0;
   G.replayPlaying=false;
-  G.totalCombos=[];
-  G.eraseAlpha={}; G.eraseDrop={};
+  G.totalCombos=[]; G.comboLabels=[];
 
   document.getElementById('replay-bar').classList.remove('hidden');
-  // 最初は開始盤面
-  G.board=cloneBoard(steps[0].boardBefore);
+  G.board=cloneBoard(boards[0]);
+  document.getElementById('rp-step-label').textContent=`0/${boards.length-1}`;
   sched();
-  updateComboUI();
-}
-
-// 再生: 1ステップ進む（移動→コンボ消去チェーン→次へ）
-function replayAdvance(){
-  if(G.replayStep>=G.replaySteps.length){ endReplay(); return; }
-  const step=G.replaySteps[G.replayStep];
-
-  // 移動後盤面を表示
-  G.board=cloneBoard(step.boardAfter);
-  G.totalCombos=[];
-  document.getElementById('rp-step-label').textContent=`${G.replayStep+1}/${G.replaySteps.length}`;
-  sched();
-
-  // チェーンをアニメで再生
-  function runChain(chainIdx){
-    if(chainIdx>=step.chains.length){
-      // このステップ完了、次へ
-      G.board=cloneBoard(step.finalBoard);
-      G.replayStep++;
-      document.getElementById('rp-step-label').textContent=`${G.replayStep}/${G.replaySteps.length}`;
-      sched();
-      if(G.replayPlaying){
-        // 自動再生中は次ステップへ
-        setTimeout(()=>{ if(G.replayPlaying) replayAdvance(); }, 400);
-      }
-      return;
-    }
-    const chain=step.chains[chainIdx];
-    G.totalCombos=[...G.totalCombos,...chain.combos];
-    updateComboUI();
-    // 消去前の盤面を復元してアニメ
-    G.board=cloneBoard(chainIdx===0 ? step.boardAfter : step.chains[chainIdx-1].boardAfter);
-    startEraseAnim(chain.combos, ()=>{
-      G.board=cloneBoard(chain.boardAfter);
-      sched();
-      setTimeout(()=>runChain(chainIdx+1), 250);
-    });
-  }
-
-  if(step.chains.length>0){
-    setTimeout(()=>runChain(0), 100);
-  } else {
-    G.replayStep++;
-    document.getElementById('rp-step-label').textContent=`${G.replayStep}/${G.replaySteps.length}`;
-    if(G.replayPlaying) setTimeout(()=>{ if(G.replayPlaying) replayAdvance(); }, 200);
-  }
 }
 
 function endReplay(){
@@ -637,35 +711,62 @@ function endReplay(){
   clearInterval(G.replayIntervalId); G.replayPlaying=false; G.replayMode=false;
   document.getElementById('replay-bar').classList.add('hidden');
   document.getElementById('btn-rp-playpause').textContent='▶';
-  // 最終盤面を表示
   if(G.replaySteps.length>0){
-    G.board=cloneBoard(G.replaySteps[G.replaySteps.length-1].finalBoard);
+    G.board=cloneBoard(G.replaySteps[G.replaySteps.length-1]);
   }
-  G.eraseAlpha={}; G.eraseDrop={}; G.locked=false;
-  G.totalCombos=[]; updateComboUI(); sched();
+  G.totalCombos=[]; G.comboLabels=[]; G.locked=false;
+  // 最終盤面でコンボ判定して消去再生
+  runComboChain();
+  sched();
 }
 
 document.getElementById('btn-rp-prev').addEventListener('click',()=>{
   if(G.replayStep<=0) return;
   cancelErase();
-  G.replayStep=Math.max(0,G.replayStep-1);
-  const step=G.replaySteps[G.replayStep];
-  G.board=cloneBoard(step ? step.boardBefore : G.initBoard);
-  G.totalCombos=[]; updateComboUI();
-  document.getElementById('rp-step-label').textContent=`${G.replayStep}/${G.replaySteps.length}`;
+  G.replayStep--;
+  G.board=cloneBoard(G.replaySteps[G.replayStep]);
+  document.getElementById('rp-step-label').textContent=`${G.replayStep}/${G.replaySteps.length-1}`;
   sched();
 });
 document.getElementById('btn-rp-next').addEventListener('click',()=>{
-  if(G.replayStep>=G.replaySteps.length) return;
+  if(G.replayStep>=G.replaySteps.length-1) return;
   cancelErase();
-  replayAdvance();
+  G.replayStep++;
+  G.board=cloneBoard(G.replaySteps[G.replayStep]);
+  document.getElementById('rp-step-label').textContent=`${G.replayStep}/${G.replaySteps.length-1}`;
+  sched();
 });
 document.getElementById('btn-rp-playpause').addEventListener('click',()=>{
   G.replayPlaying=!G.replayPlaying;
   document.getElementById('btn-rp-playpause').textContent=G.replayPlaying?'⏸':'▶';
-  if(G.replayPlaying) replayAdvance();
+  if(G.replayPlaying){
+    G.replayIntervalId=setInterval(()=>{
+      if(G.replayStep>=G.replaySteps.length-1){
+        G.replayPlaying=false;clearInterval(G.replayIntervalId);
+        document.getElementById('btn-rp-playpause').textContent='▶';
+        // 最終盤面でコンボ消去再生
+        endReplay();
+        return;
+      }
+      G.replayStep++;
+      G.board=cloneBoard(G.replaySteps[G.replayStep]);
+      document.getElementById('rp-step-label').textContent=`${G.replayStep}/${G.replaySteps.length-1}`;
+      sched();
+    },120);
+  } else clearInterval(G.replayIntervalId);
 });
-document.getElementById('btn-rp-close').addEventListener('click',endReplay);
+document.getElementById('btn-rp-close').addEventListener('click',()=>{
+  cancelErase();
+  G.replayMode=false; G.replayPlaying=false;
+  clearInterval(G.replayIntervalId);
+  document.getElementById('replay-bar').classList.add('hidden');
+  document.getElementById('btn-rp-playpause').textContent='▶';
+  if(G.replaySteps.length>0){
+    G.board=cloneBoard(G.replaySteps[G.replaySteps.length-1]);
+  }
+  G.totalCombos=[]; G.comboLabels=[]; G.locked=false;
+  sched();
+});
 document.getElementById('rp-trail-check').addEventListener('change',e=>{G.showTrail=e.target.checked;sched();});
 
 window.addEventListener('resize',()=>{resizeCanvas();sched();});
